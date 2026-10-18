@@ -50,7 +50,8 @@ jobs:
           set -euo pipefail
           python3 -m pip install --user requests
           python3 - <<'PY'
-          import os, re, sys, zipfile
+          import os, sys, zipfile
+          from html.parser import HTMLParser
           from urllib.parse import urlparse, parse_qs
           import requests
 
@@ -68,18 +69,24 @@ jobs:
               print("Recognized APKMirror download page; resolving the actual file...")
               page = session.get(url, timeout=45)
               page.raise_for_status()
-              html = page.text
-              id_match = re.search(r'<input\\b[^>]*name=["\\']id["\\'][^>]*value=["\\']([^"\\']+)', html, re.I)
-              if not id_match:
-                  id_match = re.search(r'<input\\b[^>]*value=["\\']([^"\\']+)["\\'][^>]*name=["\\']id["\\']', html, re.I)
+              class InputParser(HTMLParser):
+                  def __init__(self):
+                      super().__init__()
+                      self.inputs = []
+                  def handle_starttag(self, tag, attrs):
+                      if tag.lower() == "input":
+                          self.inputs.append(dict(attrs))
+              parser = InputParser()
+              parser.feed(page.text)
+              inputs = parser.inputs
+              download_id = next((item.get("value") for item in inputs if item.get("name") == "id" and item.get("value")), None)
               key = parse_qs(parsed.query).get("key", [None])[0]
               if not key:
-                  key_match = re.search(r'<input\\b[^>]*name=["\\']key["\\'][^>]*value=["\\']([^"\\']+)', html, re.I)
-                  key = key_match.group(1) if key_match else None
-              if not id_match or not key:
+                  key = next((item.get("value") for item in inputs if item.get("name") == "key" and item.get("value")), None)
+              if not download_id or not key:
                   sys.exit("::error::Could not resolve APKMirror's download page (missing download ID/key). Try opening the page in a browser and supplying a direct APK URL.")
               download_url = "https://www.apkmirror.com/wp-content/themes/APKMirror/download.php"
-              response = session.get(download_url, params={"id": id_match.group(1), "key": key, "forcebaseapk": "true"},
+              response = session.get(download_url, params={"id": download_id, "key": key, "forcebaseapk": "true"},
                                      headers={"Referer": url}, timeout=180, allow_redirects=True)
           else:
               response = session.get(url, timeout=180, allow_redirects=True)
