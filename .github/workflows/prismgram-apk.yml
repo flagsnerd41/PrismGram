@@ -98,7 +98,7 @@ jobs:
               page = session.get(url, timeout=45)
               page.raise_for_status()
               candidates = []
-              for raw in re.findall(r"https?://[^\\"\\s<>]+", page.text):
+              for raw in re.findall(r'https?://\\S+', page.text):
                   candidate = unescape(raw.replace("\\\\/", "/")).rstrip("),;")
                   cp = urlparse(candidate)
                   if cp.scheme == "https" and cp.hostname and cp.hostname.lower().endswith("uptodown.com") and (
