@@ -4,18 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       instagram_apk_url:
-        description: "Direct HTTPS download URL for a compatible Instagram APK/APKM/XAPK/APKS (use a trusted source)"
+        description: "Direct HTTPS download URL for a compatible universal Instagram APK (use a trusted source)"
         required: true
         type: string
-      instagram_format:
-        description: "File format at the supplied URL"
-        required: true
-        type: choice
-        options:
-          - apk
-          - apkm
-          - xapk
-          - apks
       clone:
         description: "Build as a separate app alongside official Instagram"
         required: true
@@ -52,28 +43,23 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Download compatible Instagram input
+      - name: Download compatible universal Instagram APK
         env:
           INSTAGRAM_APK_URL: ${{ inputs.instagram_apk_url }}
-          INSTAGRAM_FORMAT: ${{ inputs.instagram_format }}
         run: |
           set -euo pipefail
           case "$INSTAGRAM_APK_URL" in
             https://*) ;;
             *) echo "::error::The input URL must use HTTPS."; exit 1 ;;
           esac
-          case "$INSTAGRAM_FORMAT" in
-            apk|apkm|xapk|apks) ;;
-            *) echo "::error::Unsupported input format."; exit 1 ;;
-          esac
           curl --fail --location --retry 3 --retry-delay 2 \
-            --output "instagram.$INSTAGRAM_FORMAT" "$INSTAGRAM_APK_URL"
-          test -s "instagram.$INSTAGRAM_FORMAT"
-          if ! unzip -tq "instagram.$INSTAGRAM_FORMAT" >/dev/null; then
-            echo "::error::Downloaded file is not a valid APK/bundle archive. Use a direct download URL, not a webpage."
+            --output instagram.apk "$INSTAGRAM_APK_URL"
+          test -s instagram.apk
+          if ! unzip -tq instagram.apk >/dev/null; then
+            echo "::error::Downloaded file is not a valid APK archive. Use a direct download URL for a universal .apk, not a webpage or split bundle."
             exit 1
           fi
-          ls -lh "instagram.$INSTAGRAM_FORMAT"
+          ls -lh instagram.apk
 
       - name: Download Morphe Desktop CLI
         run: |
@@ -102,12 +88,11 @@ jobs:
 
       - name: Patch and sign Instagram
         env:
-          INSTAGRAM_FORMAT: ${{ inputs.instagram_format }}
           BUILD_CLONE: ${{ inputs.clone }}
         run: |
           set -euo pipefail
-          INPUT="instagram.$INSTAGRAM_FORMAT"
-          OUTPUT="$GITHUB_WORKSPACE/feurstagram.apk"
+          INPUT="instagram.apk"
+          OUTPUT="$GITHUB_WORKSPACE/prismgram.apk"
           REPORT="$GITHUB_WORKSPACE/patch-report.json"
           args=(patch -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT")
           if [[ "$BUILD_CLONE" == "true" ]]; then
@@ -130,7 +115,7 @@ jobs:
         with:
           name: PrismGram-${{ inputs.clone == true && 'clone' || 'standard' }}-APK
           path: |
-            feurstagram.apk
+            prismgram.apk
             patch-report.json
           if-no-files-found: error
           retention-days: 7
