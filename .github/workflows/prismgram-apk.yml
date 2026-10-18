@@ -90,38 +90,59 @@ jobs:
           fi
           ls -lh "instagram.$INSTAGRAM_FORMAT"
 
-      - name: Download build tools
+      - name: Download Morphe Desktop CLI
         run: |
           set -euo pipefail
           mkdir -p tools
           curl --fail --location --retry 3 \
             --output tools/morphe-desktop-1.18.1-all.jar \
             https://github.com/MorpheApp/morphe-desktop/releases/download/v1.18.1/morphe-desktop-1.18.1-all.jar
-          curl --fail --location --retry 3 \
-            --output tools/APKEditor-1.4.9.jar \
-            https://github.com/REAndroid/APKEditor/releases/download/V1.4.9/APKEditor-1.4.9.jar
           test -s tools/morphe-desktop-1.18.1-all.jar
-          test -s tools/APKEditor-1.4.9.jar
 
-      - name: Build and patch Instagram
+      - name: Build patch bundle
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :patches:build
+          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          if [[ -z "$MPP" || ! -s "$MPP" ]]; then
+            echo "::error::Gradle finished without producing a patch bundle."
+            exit 1
+          fi
+          echo "MPP_PATH=$MPP" >> "$GITHUB_ENV"
+          echo "Built patch bundle: $MPP"
+
+      - name: Patch and sign Instagram
         env:
           INSTAGRAM_FORMAT: ${{ inputs.instagram_format }}
           BUILD_CLONE: ${{ inputs.clone }}
         run: |
           set -euo pipefail
-          args=("instagram.$INSTAGRAM_FORMAT")
+          INPUT="instagram.$INSTAGRAM_FORMAT"
+          OUTPUT="$GITHUB_WORKSPACE/feurstagram.apk"
+          REPORT="$GITHUB_WORKSPACE/patch-report.json"
+          args=(patch -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT")
           if [[ "$BUILD_CLONE" == "true" ]]; then
-            args+=("--clone")
+            args+=(-e "Clone")
           fi
-          chmod +x ./build.sh ./gradlew
-          ./build.sh "${args[@]}"
-          test -s feurstagram.apk
-          ls -lh feurstagram.apk
+          # Do not pass --force: mismatched Instagram versions must not be patched blindly.
+          java -jar tools/morphe-desktop-1.18.1-all.jar "${args[@]}" "$INPUT"
+          test -s "$OUTPUT"
+          unzip -tq "$OUTPUT" >/dev/null
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$OUTPUT"
+          ls -lh "$OUTPUT"
+          if [[ -s "$REPORT" ]]; then
+            echo "Patch report created."
+          else
+            echo "::warning::Morphe did not write a result report."
+          fi
 
-      - name: Upload patched APK
+      - name: Upload patched APK and report
         uses: actions/upload-artifact@v4
         with:
           name: PrismGram-${{ inputs.clone == true && 'clone' || 'standard' }}-APK
-          path: feurstagram.apk
+          path: |
+            feurstagram.apk
+            patch-report.json
           if-no-files-found: error
           retention-days: 7
