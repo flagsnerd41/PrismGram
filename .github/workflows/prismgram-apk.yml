@@ -1,0 +1,121 @@
+name: PrismGram APK Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      instagram_apk_url:
+        description: "Direct HTTPS download URL for a compatible universal Instagram APK (use a trusted source)"
+        required: true
+        type: string
+      clone:
+        description: "Build as a separate app alongside official Instagram"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: prismgram-apk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build patched Instagram APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out selected branch
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Download compatible universal Instagram APK
+        env:
+          INSTAGRAM_APK_URL: ${{ inputs.instagram_apk_url }}
+        run: |
+          set -euo pipefail
+          case "$INSTAGRAM_APK_URL" in
+            https://*) ;;
+            *) echo "::error::The input URL must use HTTPS."; exit 1 ;;
+          esac
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --output instagram.apk "$INSTAGRAM_APK_URL"
+          test -s instagram.apk
+          if ! unzip -tq instagram.apk >/dev/null; then
+            echo "::error::Downloaded file is not a valid APK archive. Use a direct download URL for a universal .apk, not a webpage or split bundle."
+            exit 1
+          fi
+          ls -lh instagram.apk
+
+      - name: Download Morphe Desktop CLI
+        run: |
+          set -euo pipefail
+          mkdir -p tools
+          curl --fail --location --retry 3 \
+            --output tools/morphe-desktop-1.18.1-all.jar \
+            https://github.com/MorpheApp/morphe-desktop/releases/download/v1.18.1/morphe-desktop-1.18.1-all.jar
+          test -s tools/morphe-desktop-1.18.1-all.jar
+
+      - name: Build patch bundle
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          chmod +x ./gradlew
+          ./gradlew --no-daemon :patches:build
+          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          if [[ -z "$MPP" || ! -s "$MPP" ]]; then
+            echo "::error::Gradle finished without producing a patch bundle."
+            exit 1
+          fi
+          echo "MPP_PATH=$MPP" >> "$GITHUB_ENV"
+          echo "Built patch bundle: $MPP"
+
+      - name: Patch and sign Instagram
+        env:
+          BUILD_CLONE: ${{ inputs.clone }}
+        run: |
+          set -euo pipefail
+          INPUT="instagram.apk"
+          OUTPUT="$GITHUB_WORKSPACE/prismgram.apk"
+          REPORT="$GITHUB_WORKSPACE/patch-report.json"
+          args=(patch -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT")
+          if [[ "$BUILD_CLONE" == "true" ]]; then
+            args+=(-e "Clone")
+          fi
+          # Do not pass --force: mismatched Instagram versions must not be patched blindly.
+          java -jar tools/morphe-desktop-1.18.1-all.jar "${args[@]}" "$INPUT"
+          test -s "$OUTPUT"
+          unzip -tq "$OUTPUT" >/dev/null
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$OUTPUT"
+          ls -lh "$OUTPUT"
+          if [[ -s "$REPORT" ]]; then
+            echo "Patch report created."
+          else
+            echo "::warning::Morphe did not write a result report."
+          fi
+
+      - name: Upload patched APK and report
+        uses: actions/upload-artifact@v4
+        with:
+          name: PrismGram-${{ inputs.clone == true && 'clone' || 'standard' }}-APK
+          path: |
+            prismgram.apk
+            patch-report.json
+          if-no-files-found: error
+          retention-days: 7
