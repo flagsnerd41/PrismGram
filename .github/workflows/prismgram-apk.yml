@@ -24,6 +24,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: prismgram-apk-${{ github.ref }}
@@ -50,22 +51,6 @@ jobs:
 
       - name: Install Android SDK packages
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
-
-      - name: Configure GitHub Packages credentials
-        env:
-          GPR_USER: ${{ secrets.GPR_USER }}
-          GPR_KEY: ${{ secrets.GPR_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$GPR_USER" || -z "$GPR_KEY" ]]; then
-            echo "::error::Add repository Actions secrets GPR_USER and GPR_KEY. GPR_KEY must be a token with read:packages access."
-            exit 1
-          fi
-          mkdir -p "$HOME/.gradle"
-          {
-            printf 'gpr.user=%s\n' "$GPR_USER"
-            printf 'gpr.key=%s\n' "$GPR_KEY"
-          } >> "$HOME/.gradle/gradle.properties"
 
       - name: Download compatible Instagram input
         env:
@@ -100,6 +85,9 @@ jobs:
           test -s tools/morphe-desktop-1.18.1-all.jar
 
       - name: Build patch bundle
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           chmod +x ./gradlew
