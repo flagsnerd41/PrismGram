@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       instagram_apk_url:
-        description: "HTTPS direct APK URL or APKMirror download-page URL for a single APK"
+        description: "HTTPS direct APK URL or supported APKMirror/Uptodown download-page URL for a single APK"
         required: true
         type: string
       clone:
@@ -67,7 +67,8 @@ jobs:
               "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
           })
 
-          if parsed.hostname.lower().endswith("apkmirror.com") and "/download/" in parsed.path:
+          host = (parsed.hostname or "").lower()
+          if host.endswith("apkmirror.com") and "/download/" in parsed.path:
               print("Recognized APKMirror download page; resolving the actual file...")
               page = session.get(url, timeout=45)
               page.raise_for_status()
@@ -86,10 +87,27 @@ jobs:
               if not key:
                   key = next((item.get("value") for item in inputs if item.get("name") == "key" and item.get("value")), None)
               if not download_id or not key:
-                  sys.exit("::error::Could not resolve APKMirror's download page (missing download ID/key). Try opening the page in a browser and supplying a direct APK URL.")
+                  sys.exit("::error::Could not resolve APKMirror's download page. Try a direct APK URL.")
               download_url = "https://www.apkmirror.com/wp-content/themes/APKMirror/download.php"
               response = session.get(download_url, params={"id": download_id, "key": key, "forcebaseapk": "true"},
                                      headers={"Referer": url}, timeout=180, allow_redirects=True)
+          elif host.endswith("uptodown.com") and parsed.path.rstrip("/").endswith("/download"):
+              print("Recognized Uptodown download page; resolving a direct APK URL...")
+              import re
+              from html import unescape
+              page = session.get(url, timeout=45)
+              page.raise_for_status()
+              candidates = []
+              for raw in re.findall(r"https?://[^\\"\\s<>]+", page.text):
+                  candidate = unescape(raw.replace("\\\\/", "/")).rstrip("),;")
+                  cp = urlparse(candidate)
+                  if cp.scheme == "https" and cp.hostname and cp.hostname.lower().endswith("uptodown.com") and (
+                      "/dwn/" in cp.path or cp.path.lower().endswith(".apk")
+                  ) and candidate not in candidates:
+                      candidates.append(candidate)
+              if not candidates:
+                  sys.exit("::error::Uptodown page loaded, but no direct APK URL was exposed. Please provide a direct APK URL.")
+              response = session.get(candidates[0], headers={"Referer": url}, timeout=180, allow_redirects=True)
           else:
               response = session.get(url, timeout=180, allow_redirects=True)
 
@@ -97,7 +115,7 @@ jobs:
           content_type = response.headers.get("Content-Type", "").lower()
           disposition = response.headers.get("Content-Disposition", "").lower()
           if "text/html" in content_type or response.content[:100].lstrip().lower().startswith((b"<!doctype html", b"<html")):
-              sys.exit("::error::The URL returned an HTML page, not the APK file. APKMirror may require browser verification; use a direct APK URL.")
+              sys.exit("::error::The URL returned HTML, not an APK. The provider may require browser verification; use a direct APK URL.")
           if ".apkm" in disposition or urlparse(response.url).path.lower().endswith(".apkm"):
               sys.exit("::error::This is an APKM split bundle. Please choose a single .apk variant.")
           if not response.content:
