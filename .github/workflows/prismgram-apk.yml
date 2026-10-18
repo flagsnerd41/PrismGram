@@ -92,22 +92,29 @@ jobs:
               response = session.get(download_url, params={"id": download_id, "key": key, "forcebaseapk": "true"},
                                      headers={"Referer": url}, timeout=180, allow_redirects=True)
           elif host.endswith("uptodown.com") and parsed.path.rstrip("/").endswith("/download"):
-              print("Recognized Uptodown download page; resolving a direct APK URL...")
-              import re
+              print("Recognized Uptodown download page; resolving its download-button URL...")
               from html import unescape
+              class DownloadButtonParser(HTMLParser):
+                  def __init__(self):
+                      super().__init__()
+                      self.data_url = None
+                  def handle_starttag(self, tag, attrs):
+                      attrs = dict(attrs)
+                      if attrs.get("id") == "detail-download-button":
+                          self.data_url = attrs.get("data-url")
               page = session.get(url, timeout=45)
               page.raise_for_status()
-              candidates = []
-              for raw in re.findall(r'https?://\\S+', page.text):
-                  candidate = unescape(raw.replace("\\\\/", "/")).rstrip("),;")
-                  cp = urlparse(candidate)
-                  if cp.scheme == "https" and cp.hostname and cp.hostname.lower().endswith("uptodown.com") and (
-                      "/dwn/" in cp.path or cp.path.lower().endswith(".apk")
-                  ) and candidate not in candidates:
-                      candidates.append(candidate)
-              if not candidates:
-                  sys.exit("::error::Uptodown page loaded, but no direct APK URL was exposed. Please provide a direct APK URL.")
-              response = session.get(candidates[0], headers={"Referer": url}, timeout=180, allow_redirects=True)
+              parser = DownloadButtonParser()
+              parser.feed(page.text)
+              data_url = unescape(parser.data_url or "").strip()
+              if not data_url:
+                  sys.exit("::error::Uptodown loaded, but its download button did not expose data-url. Please provide a direct APK URL.")
+              if data_url.startswith("https://"):
+                  direct_url = data_url
+              else:
+                  direct_url = "https://dw.uptodown.com/dwn/" + data_url.lstrip("/")
+              print("Resolved Uptodown download endpoint; fetching the APK...")
+              response = session.get(direct_url, headers={"Referer": url}, timeout=180, allow_redirects=True)
           else:
               response = session.get(url, timeout=180, allow_redirects=True)
 
