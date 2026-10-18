@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       instagram_apk_url:
-        description: "Direct HTTPS download URL for a compatible universal Instagram APK (use a trusted source)"
+        description: "HTTPS direct APK URL or APKMirror download-page URL for a single APK"
         required: true
         type: string
       clone:
@@ -43,23 +43,73 @@ jobs:
       - name: Install Android SDK packages
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0"
 
-      - name: Download compatible universal Instagram APK
+      - name: Download and validate Instagram APK
         env:
           INSTAGRAM_APK_URL: ${{ inputs.instagram_apk_url }}
         run: |
           set -euo pipefail
-          case "$INSTAGRAM_APK_URL" in
-            https://*) ;;
-            *) echo "::error::The input URL must use HTTPS."; exit 1 ;;
-          esac
-          curl --fail --location --retry 3 --retry-delay 2 \
-            --output instagram.apk "$INSTAGRAM_APK_URL"
-          test -s instagram.apk
-          if ! unzip -tq instagram.apk >/dev/null; then
-            echo "::error::Downloaded file is not a valid APK archive. Use a direct download URL for a universal .apk, not a webpage or split bundle."
-            exit 1
-          fi
-          ls -lh instagram.apk
+          python3 -m pip install --user requests
+          python3 - <<'PY'
+          import os, re, sys, zipfile
+          from urllib.parse import urlparse, parse_qs
+          import requests
+
+          url = os.environ["INSTAGRAM_APK_URL"].strip()
+          parsed = urlparse(url)
+          if parsed.scheme != "https" or not parsed.hostname:
+              sys.exit("::error::Input must be a valid HTTPS URL.")
+
+          session = requests.Session()
+          session.headers.update({
+              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+          })
+
+          if parsed.hostname.lower().endswith("apkmirror.com") and "/download/" in parsed.path:
+              print("Recognized APKMirror download page; resolving the actual file...")
+              page = session.get(url, timeout=45)
+              page.raise_for_status()
+              html = page.text
+              id_match = re.search(r'<input\\b[^>]*name=["\\']id["\\'][^>]*value=["\\']([^"\\']+)', html, re.I)
+              if not id_match:
+                  id_match = re.search(r'<input\\b[^>]*value=["\\']([^"\\']+)["\\'][^>]*name=["\\']id["\\']', html, re.I)
+              key = parse_qs(parsed.query).get("key", [None])[0]
+              if not key:
+                  key_match = re.search(r'<input\\b[^>]*name=["\\']key["\\'][^>]*value=["\\']([^"\\']+)', html, re.I)
+                  key = key_match.group(1) if key_match else None
+              if not id_match or not key:
+                  sys.exit("::error::Could not resolve APKMirror's download page (missing download ID/key). Try opening the page in a browser and supplying a direct APK URL.")
+              download_url = "https://www.apkmirror.com/wp-content/themes/APKMirror/download.php"
+              response = session.get(download_url, params={"id": id_match.group(1), "key": key, "forcebaseapk": "true"},
+                                     headers={"Referer": url}, timeout=180, allow_redirects=True)
+          else:
+              response = session.get(url, timeout=180, allow_redirects=True)
+
+          response.raise_for_status()
+          content_type = response.headers.get("Content-Type", "").lower()
+          disposition = response.headers.get("Content-Disposition", "").lower()
+          if "text/html" in content_type or response.content[:100].lstrip().lower().startswith((b"<!doctype html", b"<html")):
+              sys.exit("::error::The URL returned an HTML page, not the APK file. APKMirror may require browser verification; use a direct APK URL.")
+          if ".apkm" in disposition or urlparse(response.url).path.lower().endswith(".apkm"):
+              sys.exit("::error::This is an APKM split bundle. Please choose a single .apk variant.")
+          if not response.content:
+              sys.exit("::error::The download was empty.")
+          with open("instagram.apk", "wb") as f:
+              f.write(response.content)
+
+          try:
+              with zipfile.ZipFile("instagram.apk") as apk:
+                  names = set(apk.namelist())
+                  if "AndroidManifest.xml" not in names:
+                      sys.exit("::error::Downloaded archive has no root AndroidManifest.xml; it may be an APKM/split bundle.")
+                  if any(name.lower().endswith(".apk") for name in names):
+                      sys.exit("::error::Downloaded archive contains nested APKs and appears to be a split bundle.")
+                  bad = apk.testzip()
+                  if bad:
+                      sys.exit(f"::error::Corrupt APK archive entry: {bad}")
+          except zipfile.BadZipFile:
+              sys.exit("::error::Downloaded file is not a valid APK archive.")
+          print(f"Validated single APK: {len(response.content) / (1024*1024):.1f} MiB")
+          PY
 
       - name: Download Morphe Desktop CLI
         run: |
@@ -78,7 +128,7 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
           ./gradlew --no-daemon :patches:build
-          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -printf '%T@ %p\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -printf '%T@ %p\\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
           if [[ -z "$MPP" || ! -s "$MPP" ]]; then
             echo "::error::Gradle finished without producing a patch bundle."
             exit 1
