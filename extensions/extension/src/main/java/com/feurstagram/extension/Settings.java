@@ -110,6 +110,7 @@ public final class Settings {
         if (tabBar == null) return;
         tabBar.getViewTreeObserver().addOnGlobalLayoutListener(new HomeTabWatcher(tabBar));
         Hiders.installAll(tabBar);
+        GlassNavigation.install(tabBar);
         Context activity = getActivityContext(tabBar);
         // The follow card comes first after an install or update; "What's new"
         // waits until it is dismissed.
