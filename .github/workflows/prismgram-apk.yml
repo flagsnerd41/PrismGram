@@ -182,7 +182,7 @@ jobs:
           INPUT="instagram.apk"
           OUTPUT="$GITHUB_WORKSPACE/prismgram.apk"
           REPORT="$GITHUB_WORKSPACE/patch-report.json"
-          args=(patch -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT")
+          args=(patch --continue-on-error -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT")
           if [[ "$BUILD_CLONE" == "true" ]]; then
             args+=(-e "Clone")
           fi
