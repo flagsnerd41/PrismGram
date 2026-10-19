@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       instagram_apk_url:
-        description: "HTTPS direct APK URL or supported APKMirror/Uptodown download-page URL for a single APK"
+        description: "Direct HTTPS link to a single .apk (GitHub release asset recommended). Example: https://github.com/USER/REPO/releases/download/TAG/instagram.apk"
         required: true
         type: string
       clone:
@@ -53,8 +53,7 @@ jobs:
           python3 -m pip install --user requests
           python3 - <<'PY'
           import os, sys, zipfile
-          from html.parser import HTMLParser
-          from urllib.parse import urlparse, parse_qs
+          from urllib.parse import urlparse
           import requests
 
           url = os.environ["INSTAGRAM_APK_URL"].strip()
@@ -62,87 +61,43 @@ jobs:
           if parsed.scheme != "https" or not parsed.hostname:
               sys.exit("::error::Input must be a valid HTTPS URL.")
 
+          print(f"Downloading from: {url}")
+
           session = requests.Session()
           session.headers.update({
-              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+              "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+              "Accept": "*/*",
           })
 
-          host = (parsed.hostname or "").lower()
-          if host.endswith("apkmirror.com") and "/download/" in parsed.path:
-              print("Recognized APKMirror download page; resolving the actual file...")
-              page = session.get(url, timeout=45)
-              page.raise_for_status()
-              class InputParser(HTMLParser):
-                  def __init__(self):
-                      super().__init__()
-                      self.inputs = []
-                  def handle_starttag(self, tag, attrs):
-                      if tag.lower() == "input":
-                          self.inputs.append(dict(attrs))
-              parser = InputParser()
-              parser.feed(page.text)
-              inputs = parser.inputs
-              download_id = next((item.get("value") for item in inputs if item.get("name") == "id" and item.get("value")), None)
-              key = parse_qs(parsed.query).get("key", [None])[0]
-              if not key:
-                  key = next((item.get("value") for item in inputs if item.get("name") == "key" and item.get("value")), None)
-              if not download_id or not key:
-                  sys.exit("::error::Could not resolve APKMirror's download page. Try a direct APK URL.")
-              download_url = "https://www.apkmirror.com/wp-content/themes/APKMirror/download.php"
-              response = session.get(download_url, params={"id": download_id, "key": key, "forcebaseapk": "true"},
-                                     headers={"Referer": url}, timeout=180, allow_redirects=True)
-          elif host.endswith("uptodown.com") and parsed.path.rstrip("/").endswith("/download"):
-              print("Recognized Uptodown download page; resolving its download-button URL...")
-              from html import unescape
-              class DownloadButtonParser(HTMLParser):
-                  def __init__(self):
-                      super().__init__()
-                      self.data_url = None
-                  def handle_starttag(self, tag, attrs):
-                      attrs = dict(attrs)
-                      if attrs.get("id") == "detail-download-button":
-                          self.data_url = attrs.get("data-url")
-              page = session.get(url, timeout=45)
-              page.raise_for_status()
-              parser = DownloadButtonParser()
-              parser.feed(page.text)
-              data_url = unescape(parser.data_url or "").strip()
-              if not data_url:
-                  sys.exit("::error::Uptodown loaded, but its download button did not expose data-url. Please provide a direct APK URL.")
-              if data_url.startswith("https://"):
-                  direct_url = data_url
-              else:
-                  direct_url = "https://dw.uptodown.com/dwn/" + data_url.lstrip("/")
-              print("Resolved Uptodown download endpoint; fetching the APK...")
-              response = session.get(direct_url, headers={"Referer": url}, timeout=180, allow_redirects=True)
-          else:
-              response = session.get(url, timeout=180, allow_redirects=True)
-
+          # GitHub release assets are the most reliable source
+          response = session.get(url, timeout=300, allow_redirects=True, stream=True)
           response.raise_for_status()
-          content_type = response.headers.get("Content-Type", "").lower()
-          disposition = response.headers.get("Content-Disposition", "").lower()
-          if "text/html" in content_type or response.content[:100].lstrip().lower().startswith((b"<!doctype html", b"<html")):
-              sys.exit("::error::The URL returned HTML, not an APK. The provider may require browser verification; use a direct APK URL.")
-          if ".apkm" in disposition or urlparse(response.url).path.lower().endswith(".apkm"):
-              sys.exit("::error::This is an APKM split bundle. Please choose a single .apk variant.")
-          if not response.content:
-              sys.exit("::error::The download was empty.")
-          with open("instagram.apk", "wb") as f:
-              f.write(response.content)
 
+          # Write to disk
+          with open("instagram.apk", "wb") as f:
+              for chunk in response.iter_content(chunk_size=8192):
+                  if chunk:
+                      f.write(chunk)
+
+          size = os.path.getsize("instagram.apk")
+          if size < 10_000_000:
+              sys.exit(f"::error::Downloaded file is too small ({size} bytes). Not a valid Instagram APK.")
+
+          # Validate it is a real APK
           try:
               with zipfile.ZipFile("instagram.apk") as apk:
                   names = set(apk.namelist())
                   if "AndroidManifest.xml" not in names:
-                      sys.exit("::error::Downloaded archive has no root AndroidManifest.xml; it may be an APKM/split bundle.")
+                      sys.exit("::error::No AndroidManifest.xml found. This is not a valid single APK.")
                   if any(name.lower().endswith(".apk") for name in names):
-                      sys.exit("::error::Downloaded archive contains nested APKs and appears to be a split bundle.")
+                      sys.exit("::error::Archive contains nested APKs (split bundle). Use a single .apk file.")
                   bad = apk.testzip()
                   if bad:
-                      sys.exit(f"::error::Corrupt APK archive entry: {bad}")
+                      sys.exit(f"::error::Corrupt APK: {bad}")
           except zipfile.BadZipFile:
-              sys.exit("::error::Downloaded file is not a valid APK archive.")
-          print(f"Validated single APK: {len(response.content) / (1024*1024):.1f} MiB")
+              sys.exit("::error::File is not a valid ZIP/APK archive.")
+
+          print(f"Validated single APK: {size / (1024*1024):.1f} MiB")
           PY
 
       - name: Download Morphe Desktop CLI
@@ -182,17 +137,11 @@ jobs:
           if [[ "$BUILD_CLONE" == "true" ]]; then
             args+=(-e "Clone")
           fi
-          # Do not pass --force: mismatched Instagram versions must not be patched blindly.
           java -jar tools/morphe-desktop-1.18.1-all.jar "${args[@]}" "$INPUT"
           test -s "$OUTPUT"
           unzip -tq "$OUTPUT" >/dev/null
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$OUTPUT"
           ls -lh "$OUTPUT"
-          if [[ -s "$REPORT" ]]; then
-            echo "Patch report created."
-          else
-            echo "::warning::Morphe did not write a result report."
-          fi
 
       - name: Upload patched APK and report
         uses: actions/upload-artifact@v4
