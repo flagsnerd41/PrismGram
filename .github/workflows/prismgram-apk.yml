@@ -164,7 +164,7 @@ jobs:
           ./gradlew --no-daemon :patches:build
           # The Morphe Gradle plugin may place the .mpp outside build/libs,
           # so search the repository build outputs instead of assuming one path.
-          MPP="$(find . -type f -name '*.mpp' ! -name '*sources*' ! -name '*javadoc*' ! -path '*/.gradle/*' -printf '%T@ %p\\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*-sources.mpp' ! -name '*-javadoc.mpp' -print -quit)"
           if [[ -z "$MPP" || ! -s "$MPP" ]]; then
             echo "::error::Gradle tasks succeeded, but no .mpp file was found anywhere in the workspace."
             echo "Debugging: patch-related build files:"
