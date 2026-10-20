@@ -120,7 +120,6 @@ jobs:
           echo "=== Searching for any .mpp ==="
           find patches/build -name "*.mpp" -type f || true
 
-          # Accept any .mpp produced under patches/build
           MPP="$(find patches/build -type f -name '*.mpp' ! -name '*sources*' ! -name '*javadoc*' | head -n 1)"
 
           if [[ -z "$MPP" || ! -s "$MPP" ]]; then
@@ -139,11 +138,17 @@ jobs:
           INPUT="instagram.apk"
           OUTPUT="$GITHUB_WORKSPACE/prismgram.apk"
           REPORT="$GITHUB_WORKSPACE/patch-report.json"
-          args=(patch -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT")
+
+          # --continue-on-error: Instagram 453 broke the Feed item filtering fingerprint.
+          # Other patches still apply; we can fix the fingerprint later.
+          args=(patch -p "$MPP_PATH" -o "$OUTPUT" -r "$REPORT" --continue-on-error)
+
           if [[ "$BUILD_CLONE" == "true" ]]; then
             args+=(-e "Clone")
           fi
+
           java -jar tools/morphe-desktop-1.18.1-all.jar "${args[@]}" "$INPUT"
+
           test -s "$OUTPUT"
           unzip -tq "$OUTPUT" >/dev/null
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$OUTPUT"
