@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       instagram_apk_url:
-        description: "Direct HTTPS link to a single .apk (GitHub release asset recommended). Example: https://github.com/USER/REPO/releases/download/TAG/instagram.apk"
+        description: "Direct HTTPS link to a single .apk (GitHub release asset recommended)"
         required: true
         type: string
       clone:
@@ -69,11 +69,9 @@ jobs:
               "Accept": "*/*",
           })
 
-          # GitHub release assets are the most reliable source
           response = session.get(url, timeout=300, allow_redirects=True, stream=True)
           response.raise_for_status()
 
-          # Write to disk
           with open("instagram.apk", "wb") as f:
               for chunk in response.iter_content(chunk_size=8192):
                   if chunk:
@@ -83,7 +81,6 @@ jobs:
           if size < 10_000_000:
               sys.exit(f"::error::Downloaded file is too small ({size} bytes). Not a valid Instagram APK.")
 
-          # Validate it is a real APK
           try:
               with zipfile.ZipFile("instagram.apk") as apk:
                   names = set(apk.namelist())
@@ -117,11 +114,20 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
           ./gradlew --no-daemon :patches:build
-          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -print | sort | tail -n 1)"
+
+          echo "=== Contents of patches/build/libs ==="
+          ls -la patches/build/libs/ || true
+          echo "=== Searching for any .mpp ==="
+          find patches/build -name "*.mpp" -type f || true
+
+          # Accept any .mpp produced under patches/build
+          MPP="$(find patches/build -type f -name '*.mpp' ! -name '*sources*' ! -name '*javadoc*' | head -n 1)"
+
           if [[ -z "$MPP" || ! -s "$MPP" ]]; then
-            echo "::error::Gradle finished without producing a patch bundle."
+            echo "::error::Gradle finished without producing a patch bundle (.mpp)."
             exit 1
           fi
+
           echo "MPP_PATH=$MPP" >> "$GITHUB_ENV"
           echo "Built patch bundle: $MPP"
 
