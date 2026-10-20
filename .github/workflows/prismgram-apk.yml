@@ -117,7 +117,7 @@ jobs:
           set -euo pipefail
           chmod +x ./gradlew
           ./gradlew --no-daemon :patches:build
-          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -printf '%T@ %p\\n' | sort -nr | head -n 1 | cut -d' ' -f2-)"
+          MPP="$(find patches/build/libs -maxdepth 1 -type f -name 'patches-*.mpp' ! -name '*sources*' ! -name '*javadoc*' -print | sort | tail -n 1)"
           if [[ -z "$MPP" || ! -s "$MPP" ]]; then
             echo "::error::Gradle finished without producing a patch bundle."
             exit 1
