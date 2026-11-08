@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://jean-voila.github.io/FeurStagram/sitemap.xml
