@@ -231,7 +231,7 @@ private fun NavigationPill(
         ) {
             tabs.forEach { (label, icon) ->
                 val active = selected == label
-                val tint by animateColorAsState(if (active) Accent else Muted, label)
+                val tint by animateColorAsState(targetValue = if (active) Accent else Muted, label = label)
                 Row(
                     Modifier
                         .clip(CircleShape)
